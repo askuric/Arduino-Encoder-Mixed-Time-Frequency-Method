@@ -1,66 +1,132 @@
-// -- Pin change interrupt
-#include <PciManager.h>
-#include <PciListenerImp.h>
+/*
+ *  Mixed time and frequency approach of velocity calucaiton
+ *  
+ *  This approach was introduced in the paper:
+ *  "An embedded system for position and speed measurement adopting incremental encoders." 
+ *  by Petrella, Roberto, and Marco Tursini. 
+ *  IEEE Transactions on industry applications 44.5 (2008): 1436-1444.
+ * 
+ * The main benefit of this approach is that has very low error for 
+ * both low and high speed calculation using the incremental encoder
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining 
+ * a copy of this software and associated documentation files (the "Software"), 
+ * to deal in the Software without restriction, including without limitation the 
+ * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or 
+ * sell copies of the Software, and to permit persons to whom the Software is 
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included 
+ * in all copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, 
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF 
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. 
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, 
+ * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, 
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR 
+ * THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * 
+ * Antun Skuric 
+ * antun.skuric@outlook.com
+ * March, 2020
+ */
 
-long int encoderPos = 0;  // a counter for the dial
-long int lastReportedPos = 1;   // change management
-static boolean rotating=false;      // debounce management
 
-// interrupt service routine vars
-boolean A_set = false;              
-boolean B_set = false;
-
-int  encoderPinA = A0;   // put your pin B pin number
-int encoderPinB = A1;  // put your pin B pin number
-
-void doEncoderA();
-void doEncoderB();
-PciListenerImp listenerA(encoderPinA, doEncoderA);
-PciListenerImp listenerB(encoderPinB, doEncoderB);
+// encoder variables
+long int counter = 0;  // impulse counter
+long long impulse_timestamp_us = 0;   // last impulse timestmap  
+int A1_=0;
+int B1_=0;
+// Only pins 2 and 3 are supported
+int  encoderPinA = 2;   // Arduino UNO interrupt 0
+int encoderPinB = 3;  // Arduino UNO interrupt 1
 
 
-void setup() {
-  Serial.begin(115200);
-  
-  // ENCODER PULLUP
+void setup () {
+
+  // encoder pins
   pinMode(encoderPinA, INPUT_PULLUP); // new method of enabling pullups
   pinMode(encoderPinB, INPUT_PULLUP); 
-    
-  PciManager.registerListener(&listenerA);
-  PciManager.registerListener(&listenerB);
-  Serial.println("Ready.");
+  
+  // pina
+  attachInterrupt(digitalPinToInterrupt(encoderPinA), doEncoderA, CHANGE);
+  // pinb
+  attachInterrupt(digitalPinToInterrupt(encoderPinB), doEncoderB, CHANGE);
+
+  // debugging port
+  Serial.begin(115200);
 }
 
-void loop() { 
-  delay(2);
-  Serial.println(encoderPos);
+void loop() {
+    delay(10); 
+    Serial.println(velocity_MTF());
 }
 
+// funciton using mixed time and frequency measurement technique
+// returns the float velocity value
+//
+// MAKE SURE TO IMPLEMENT MISSING LINE OF CODE
+float velocity_MTF()
+{
+  static float Th_1,freq;   
+  static long N, prev_timestamp_us;
+
+  // timestamp 
+  long timestamp_us = micros();
+  // sampling time calculation
+  float Ts = (timestamp_us - prev_timestamp_us)*1e-6;
+  // time from last impulse
+  float Th = (timestamp_us - impulse_timestamp_us)*1e-6;
+  long dN = counter - N;
+
+  // Velocity calculation (Eq.3.)
+  // dN - impulses received
+  // Ts - sampling time - time in between function calls
+  // Th - time from last impulse 
+  // Th_1 - time form last impulse of the previous call
+  // only increment if some impulses received
+  freq = dN != 0 ? dN /(Ts + Th_1 - Th) : freq; 
+
+  // modify this line to get the real velocity value
+  // velocity = frequency * 2 * PI / CPR
+  float vel = freq;
+  
+  // save variables for next pass
+  prev_timestamp_us = timestamp_us;
+  // save velocity calculation variables
+  Th_1 = Th;
+  N = counter;
+  return vel;
+}
+
+//  Encoder methods
+//  enabling CPR=4xPPR behaviour
 // A channel
 void doEncoderA(){
-
-  // Test transition, did things really change? 
-  if( digitalRead(encoderPinA) != A_set ) {  // debounce once more
-    A_set = !A_set;
-
-    // adjust counter + if A leads B
-    if ( A_set && !B_set ) 
-      encoderPos += 1;
-
-    rotating = false;  // no more debouncing until loop() hits again
+  int A = digitalRead(encoderPinA);
+  if( A!= A1_ ){
+    if(A1_ == B1_){
+      counter += 1;
+    }else{
+      counter -= 1;
+    }
+   A1_ = A;
+   impulse_timestamp_us = micros();
   }
 }
 
 // B channel
 void doEncoderB(){
-  
-  if( digitalRead(encoderPinB) != B_set ) {
-    B_set = !B_set;
-    //  adjust counter - 1 if B leads A
-    if( B_set && !A_set ) 
-      encoderPos -= 1;
-
-    rotating = false;
+  int B = digitalRead(encoderPinB);
+  if( B!= B1_ ){
+    if( A1_ != B1_ ){
+      counter += 1;
+    }else{
+      counter -= 1;
+    }
+    B1_ = B;
+    impulse_timestamp_us = micros();
   }
 }
 
