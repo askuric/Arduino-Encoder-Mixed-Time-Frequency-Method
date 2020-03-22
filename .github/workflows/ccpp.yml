@@ -1,4 +1,4 @@
-name: SimpleBuild
+name: Compile
 on: push
 jobs:
   build:
